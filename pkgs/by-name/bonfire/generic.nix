@@ -84,7 +84,6 @@ beamPkgs.mixRelease (finalAttrs: {
       '';
       passthru = previousRust.passthru // {
         inherit nativeDir;
-        #nativeDir = with builtins; head (attrNames (readDir "${previousRust.src}/native"));
         native = rustPlatform.buildRustPackage {
           pname = "${previousRust.passthru.packageName}-native";
           version = previousRust.version;
@@ -207,7 +206,6 @@ beamPkgs.mixRelease (finalAttrs: {
               cp $src/priv/cldr/locales/* $out/lib/erlang/lib/ex_cldr-${previousMixPkg.version}/priv/cldr/locales/
             '';
             passthru = lib.recursiveUpdate previousMixPkg.passthru {
-              # Description: update pkgs/by-name/bonfire/deps/ex_cldr/hash
               # Explanation: fetchFromGitHub is used instead of fetchHex
               # to let nix provision locales instead of mix.
               updateScript = writeShellApplication {

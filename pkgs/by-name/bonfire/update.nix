@@ -45,6 +45,7 @@ in
                    build \
                    --option sandbox relaxed \
                    --no-link --print-out-paths \
+                   --refresh \
                    --repair \
                    -f . \
                    bonfire.${FLAVOUR}.passthru.update.package )
