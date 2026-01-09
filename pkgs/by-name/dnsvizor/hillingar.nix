@@ -4,10 +4,12 @@
   fetchFromGitHub,
   pkgsStatic,
   stdenv,
+  callPackage,
 }:
 
 let
   version = "0-unstable-2025-12-17";
+  hillingar = callPackage ../../../lib/pkgs/mirage.nix { };
 
   unikernel =
     lib.flip hillingar.mkUnikernelPackages
