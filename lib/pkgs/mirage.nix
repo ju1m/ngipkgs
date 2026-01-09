@@ -125,7 +125,7 @@ rec {
       };
     in
     rec {
-      scope = (buildOpamProject queryArgs pkg_name src query).overrideScope' overlay;
+      scope = (buildOpamProject queryArgs pkg_name src query).overrideScope overlay;
       unikernel = scope.${pkg_name};
     };
 
