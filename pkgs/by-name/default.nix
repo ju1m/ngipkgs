@@ -4,6 +4,7 @@
   dream2nix,
   hillingar,
   sources,
+  system,
 }:
 let
   inherit (builtins)
@@ -57,7 +58,22 @@ let
     in
     evaluated.config.public;
 
-  callPackage = pkgs.newScope (self // { inherit callPackage; });
+  callPackage = pkgs.newScope (
+    self
+    // {
+      inherit callPackage;
+
+      opam-nix = sources.opam-nix.lib.${system};
+      inherit (sources)
+        nix-filter
+        flake-utils
+        opam2json
+        opam-repository
+        opam-overlays
+        mirage-opam-overlays
+        ;
+    }
+  );
 
   mkSbtDerivation =
     x:
