@@ -6,30 +6,33 @@
 }:
 
 rec {
-  # run `mirage configure` on source,
-  # with mirage, dune, and ocaml from `opam-nix`
-  configureSrcFor =
-    unikernelName: mirageDir: query: src: target:
-    # Get mirage tool and dependancies from opam.
-    # We could also get them from nixpkgs but they may not be up to date.
-    let
-      configure-scope = opam-nix.queryToScope { } ({ mirage = "*"; } // query);
-    in
+  # Description: run `mirage configure` on source,
+  # with mirage, dune, and ocaml from `opam-nix`.
+  configure =
+    {
+      pname,
+      version,
+      mirageDir ? ".",
+      query,
+      src,
+      target,
+      opamPackages ? opam-nix.queryToScope { } ({ mirage = "*"; } // query),
+      ...
+    }:
     stdenv.mkDerivation {
-      name = "mirage-${unikernelName}-${target}";
-      # only copy these files and only rebuild when they change
-      inherit src;
-      buildInputs = with configure-scope; [ mirage ];
-      nativeBuildInputs = with configure-scope; [
+      name = "${pname}-${target}";
+      inherit src version;
+      buildInputs = with opamPackages; [ mirage ];
+      nativeBuildInputs = with opamPackages; [
         dune
         ocaml
       ];
       buildPhase = ''
         runHook preBuild
         mirage configure -f ${mirageDir}/config.ml -t ${target}
-        # Move Opam file to root so a recursive search for opam files isn't
-        # required. Prefix it so it doesn't interfere with other packages.
-        cp ${mirageDir}/mirage/${unikernelName}-${target}.opam mirage-${unikernelName}-${target}.opam
+        # Description: move Opam file to root so a recursive search for opam files isn't required.
+        # Prefix it so it doesn't interfere with other packages.
+        cp ${mirageDir}/mirage/${pname}-${target}.opam ${pname}-${target}.opam
         runHook postBuild
       '';
       installPhase = ''
@@ -39,118 +42,76 @@ rec {
       '';
     };
 
-  # collect all dependancy sources in a scope
-  mkScopeMonorepo = monorepoQuery: src: opam-nix.buildOpamMonorepo { } src monorepoQuery;
-
-  # read all the opam files from the configured source and build the unikernel.
-  # Return the attrs { unikernel; scope }.
-  mkScopeOpam =
-    unikernelName: mirageDir: depexts: monorepoQuery: queryArgs: query: src:
+  # Description: read opam files from mirageConf and build the unikernel.
+  build =
+    {
+      pname,
+      version,
+      depexts ? [ ],
+      mirageDir ? ".",
+      queryArgs ? { },
+      query ? { },
+      monorepoQuery,
+      ...
+    }@args:
     let
-      pkg_name = src.name; # Specified by 'configureSrcFor'
-      overlay = final: prev: {
-        "${pkg_name}" = prev.${pkg_name}.overrideAttrs (
-          _:
-          let
-            monorepo-scope = mkScopeMonorepo monorepoQuery src;
-          in
-          {
-            # TODO pick depexts of deps in monorepo
-            buildInputs = prev.${pkg_name}.buildInputs ++ depexts;
+      mirageConf = configure args;
+      monorepo = opam-nix.buildOpamMonorepo { } mirageConf monorepoQuery;
+      packages = (opam-nix.buildOpamProject queryArgs mirageConf.name mirageConf query).overrideScope (
+        finalOpam: previousOpam: {
+          ${mirageConf.name} = previousOpam.${mirageConf.name}.overrideAttrs (previousAttrs: {
+            inherit version;
+            __intentionallyOverridingVersion = true;
+            # ToDo: pick depexts of deps in monorepo?
+            buildInputs = previousAttrs.buildInputs ++ depexts;
+            env =
+              previousAttrs.env or { }
+              // lib.optionalAttrs (finalOpam ? ocaml-solo5) {
+                OCAMLFIND_CONF = "${finalOpam.ocaml-solo5}/lib/findlib.conf";
+              };
             buildPhase = ''
-              runHook preBuild
-              # find solo5 toolchain
-              ${
-                if final ? ocaml-solo5 then
-                  ''export OCAMLFIND_CONF="${final.ocaml-solo5}/lib/findlib.conf"''
-                else
-                  ""
-              }
-              # create duniverse
+              #runHook preBuild
               mkdir duniverse
               echo '(vendored_dirs *)' > duniverse/dune
               ${lib.concatStringsSep "\n" (
                 lib.mapAttrsToList (
-                  # TODO get dune build to pick up symlinks
+                  # ToDo: get dune build to pick up symlinks?
                   name: path: "cp -r ${path} duniverse/${lib.toLower name}"
-                ) monorepo-scope
+                ) monorepo
               )}
-              ls duniverse
-              # don't fail on warnings
+              # Note: doesn't fail on warnings
               dune build ${mirageDir} --profile release
-              runHook postBuild
+              #runHook postBuild
             '';
             installPhase = ''
-              runHook preInstall
+              #runHook preInstall
               mkdir $out
-              cp -L ${mirageDir}/dist/${unikernelName}* $out/
-              runHook postInstall
+              cp -L ${mirageDir}/dist/${pname}* $out/
+              #runHook postInstall
             '';
-          }
-        );
-      };
+          });
+        }
+      );
+      unikernel = packages.${mirageConf.name};
     in
-    rec {
-      scope = (opam-nix.buildOpamProject queryArgs pkg_name src query).overrideScope overlay;
-      unikernel = scope.${pkg_name};
-    };
+    unikernel.overrideAttrs (previousAttrs: {
+      passthru = previousAttrs.passthru // {
+        inherit
+          monorepo
+          packages
+          ;
+      };
+    });
 
-  mkUnikernelPackages =
-    {
-      unikernelName,
-      mirageDir ? ".",
-      depexts ? [ ],
-      overlays ? [ ],
-      monorepoQuery ? { },
-      queryArgs ? { },
-      query ? { },
-      configured ? false,
-    }:
-    src:
-    if configured then
-      {
-        unikernel =
-          (mkScopeOpam unikernelName mirageDir depexts monorepoQuery queryArgs query src).unikernel;
-        scope = (mkScopeOpam unikernelName mirageDir depexts monorepoQuery queryArgs query src).scope;
-        monorepo = mkScopeMonorepo monorepoQuery;
-      }
-    else
-      let
-        targets = [
-          "xen"
-          "qubes"
-          "unix"
-          "macosx"
-          "virtio"
-          "hvt"
-          "spt"
-          "muen"
-          "genode"
-        ];
-        mapTargets =
-          mkScope:
-          let
-            pipeTarget =
-              target:
-              lib.pipe target [
-                (configureSrcFor unikernelName mirageDir query src)
-                mkScope
-              ];
-            mappedTargets = builtins.map (target: lib.nameValuePair target (pipeTarget target)) targets;
-          in
-          builtins.listToAttrs mappedTargets;
-        targetUnikernels = lib.mapAttrs' (target: scope: lib.nameValuePair target scope.unikernel) (
-          mapTargets (mkScopeOpam unikernelName mirageDir depexts monorepoQuery queryArgs query)
-        );
-        targetScopes = lib.mapAttrs' (target: scope: lib.nameValuePair "${target}-scope" scope.scope) (
-          mapTargets (mkScopeOpam unikernelName mirageDir depexts monorepoQuery queryArgs query)
-        );
-        targetMonorepoScopes = lib.mapAttrs' (target: scope: lib.nameValuePair "${target}-monorepo" scope) (
-          mapTargets (mkScopeMonorepo monorepoQuery)
-        );
-        targetConfigured = lib.mapAttrs' (target: scope: lib.nameValuePair "${target}-configured" scope) (
-          mapTargets (src: src)
-        );
-      in
-      targetUnikernels // targetScopes // targetMonorepoScopes // targetConfigured;
+  possibleTargets = [
+    "xen"
+    "qubes"
+    "unix"
+    "macosx"
+    "virtio"
+    "hvt"
+    "spt"
+    "muen"
+    "genode"
+  ];
 }
