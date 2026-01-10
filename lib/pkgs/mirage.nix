@@ -24,19 +24,19 @@ rec {
         dune
         ocaml
       ];
-      phases = [
-        "unpackPhase"
-        "configurePhase"
-        "installPhase"
-        "fixupPhase"
-      ];
-      configurePhase = ''
+      buildPhase = ''
+        runHook preBuild
         mirage configure -f ${mirageDir}/config.ml -t ${target}
         # Move Opam file to root so a recursive search for opam files isn't
         # required. Prefix it so it doesn't interfere with other packages.
         cp ${mirageDir}/mirage/${unikernelName}-${target}.opam mirage-${unikernelName}-${target}.opam
+        runHook postBuild
       '';
-      installPhase = "cp -R . $out";
+      installPhase = ''
+        runHook preBuild
+        cp -R . $out
+        runHook postBuild
+      '';
     };
 
   # collect all dependancy sources in a scope
@@ -55,42 +55,36 @@ rec {
             monorepo-scope = mkScopeMonorepo monorepoQuery src;
           in
           {
-            phases = [
-              "unpackPhase"
-              "preBuild"
-              "buildPhase"
-              "installPhase"
-            ];
             # TODO pick depexts of deps in monorepo
             buildInputs = prev.${pkg_name}.buildInputs ++ depexts;
-            preBuild =
-              let
-                # TODO get dune build to pick up symlinks
-                createDep = name: path: "cp -r ${path} duniverse/${lib.toLower name}";
-                createDeps = lib.mapAttrsToList createDep monorepo-scope;
-                createDuniverse = builtins.concatStringsSep "\n" createDeps;
-              in
-              ''
-                # find solo5 toolchain
-                ${
-                  if final ? ocaml-solo5 then
-                    ''export OCAMLFIND_CONF="${final.ocaml-solo5}/lib/findlib.conf"''
-                  else
-                    ""
-                }
-                # create duniverse
-                mkdir duniverse
-                echo '(vendored_dirs *)' > duniverse/dune
-                ${createDuniverse}
-                ls duniverse
-              '';
             buildPhase = ''
+              runHook preBuild
+              # find solo5 toolchain
+              ${
+                if final ? ocaml-solo5 then
+                  ''export OCAMLFIND_CONF="${final.ocaml-solo5}/lib/findlib.conf"''
+                else
+                  ""
+              }
+              # create duniverse
+              mkdir duniverse
+              echo '(vendored_dirs *)' > duniverse/dune
+              ${lib.concatStringsSep "\n" (
+                lib.mapAttrsToList (
+                  # TODO get dune build to pick up symlinks
+                  name: path: "cp -r ${path} duniverse/${lib.toLower name}"
+                ) monorepo-scope
+              )}
+              ls duniverse
               # don't fail on warnings
               dune build ${mirageDir} --profile release
+              runHook postBuild
             '';
             installPhase = ''
+              runHook preInstall
               mkdir $out
               cp -L ${mirageDir}/dist/${unikernelName}* $out/
+              runHook postInstall
             '';
           }
         );
