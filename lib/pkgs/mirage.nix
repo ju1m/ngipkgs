@@ -28,25 +28,7 @@ rec {
     pkgs.stdenv.mkDerivation {
       name = "mirage-${unikernelName}-${target}";
       # only copy these files and only rebuild when they change
-      src =
-        with nix-filter.lib;
-        filter {
-          root = src;
-          exclude = [
-            (inDirectory "_build")
-            (inDirectory "dist")
-            (inDirectory "duniverse")
-            (inDirectory "${mirageDir}/mirage")
-            "dune"
-            "dune.build"
-            "dune.config"
-            "dune-project"
-            "dune-workspace"
-            "Makefile"
-            "flake.nix"
-            "flake.lock"
-          ];
-        };
+      inherit src;
       buildInputs = with configure-scope; [ mirage ];
       nativeBuildInputs = with configure-scope; [
         dune
