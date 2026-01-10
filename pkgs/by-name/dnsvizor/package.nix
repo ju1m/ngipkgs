@@ -1,10 +1,10 @@
 {
   lib,
-  hillingar,
   fetchFromGitHub,
   pkgsStatic,
   stdenv,
   callPackage,
+  ...
 }:
 
 let
