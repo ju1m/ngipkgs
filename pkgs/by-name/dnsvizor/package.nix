@@ -32,6 +32,7 @@ lib.genAttrs targets (
     pname = "dnsvizor";
     version = "0-unstable-2025-12-17";
     inherit target;
+    package-defs = ./package-defs + "/${target}.json";
     src = fetchFromGitHub {
       owner = "robur-coop";
       repo = "dnsvizor";

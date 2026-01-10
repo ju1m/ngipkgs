@@ -52,53 +52,72 @@ rec {
       queryArgs ? { },
       query ? { },
       monorepoQuery,
+      package-defs,
       ...
     }@args:
     let
       mirageConf = configure args;
       monorepo = opam-nix.buildOpamMonorepo { } mirageConf monorepoQuery;
-      packages = (opam-nix.buildOpamProject queryArgs mirageConf.name mirageConf query).overrideScope (
-        finalOpam: previousOpam: {
-          ${mirageConf.name} = previousOpam.${mirageConf.name}.overrideAttrs (previousAttrs: {
-            inherit version;
-            __intentionallyOverridingVersion = true;
-            # ToDo: pick depexts of deps in monorepo?
-            buildInputs = previousAttrs.buildInputs ++ depexts;
-            env =
-              previousAttrs.env or { }
-              // lib.optionalAttrs (finalOpam ? ocaml-solo5) {
-                OCAMLFIND_CONF = "${finalOpam.ocaml-solo5}/lib/findlib.conf";
-              };
-            buildPhase = ''
-              #runHook preBuild
-              mkdir duniverse
-              echo '(vendored_dirs *)' > duniverse/dune
-              ${lib.concatStringsSep "\n" (
-                lib.mapAttrsToList (
-                  # ToDo: get dune build to pick up symlinks?
-                  name: path: "cp -r ${path} duniverse/${lib.toLower name}"
-                ) monorepo
-              )}
-              # Note: doesn't fail on warnings
-              dune build ${mirageDir} --profile release
-              #runHook postBuild
-            '';
-            installPhase = ''
-              #runHook preInstall
-              mkdir $out
-              cp -L ${mirageDir}/dist/${pname}* $out/
-              #runHook postInstall
-            '';
-          });
+      opamProject = opam-nix.buildOpamProject queryArgs mirageConf.name mirageConf query;
+      overlay = finalOpam: previousOpam: {
+        ${mirageConf.name} = previousOpam.${mirageConf.name}.overrideAttrs (previousAttrs: {
+          inherit version;
+          __intentionallyOverridingVersion = true;
+          # ToDo: pick depexts of deps in monorepo?
+          buildInputs = previousAttrs.buildInputs ++ depexts;
+          env =
+            previousAttrs.env or { }
+            // lib.optionalAttrs (finalOpam ? ocaml-solo5) {
+              OCAMLFIND_CONF = "${finalOpam.ocaml-solo5}/lib/findlib.conf";
+            };
+          buildPhase = ''
+            #runHook preBuild
+            mkdir duniverse
+            echo '(vendored_dirs *)' > duniverse/dune
+            ${lib.concatStringsSep "\n" (
+              lib.mapAttrsToList (
+                # ToDo: get dune build to pick up symlinks?
+                name: path: "cp -r ${path} duniverse/${lib.toLower name}"
+              ) monorepo
+            )}
+            # Note: doesn't fail on warnings
+            dune build ${mirageDir} --profile release
+            #runHook postBuild
+          '';
+          installPhase = ''
+            #runHook preInstall
+            mkdir $out
+            cp -L ${mirageDir}/dist/${pname}* $out/
+            #runHook postInstall
+          '';
+        });
+      };
+      resolved = opamProject.overrideScope overlay;
+      unikernel = resolved.${mirageConf.name};
+
+      # Materialization: WORK IN PROGRESS: NOT WORKING YET: NOT WELL UNDERSTOOD: still requires an IFD
+      mirageConfMaterialized = configure (
+        args
+        // {
+          opamPackages = opam-nix.materialize { } ({ mirage = "*"; } // query);
         }
       );
-      unikernel = packages.${mirageConf.name};
+      # FixMe: suspicious buildOpamMonorepo
+      monorepoMaterialized = opam-nix.buildOpamMonorepo { } mirageConfMaterialized monorepoQuery;
+      package-defs = opam-nix.materializeOpamProject { } mirageConf.name mirageConfMaterialized query;
+      materialized =
+        (opam-nix.materializedDefsToScope {
+          sourceMap.${mirageConf.name} = mirageConfMaterialized;
+        } package-defs).overrideScope
+          overlay;
     in
     unikernel.overrideAttrs (previousAttrs: {
       passthru = previousAttrs.passthru // {
         inherit
           monorepo
-          packages
+          resolved
+          package-defs
+          materialized
           ;
       };
     });
