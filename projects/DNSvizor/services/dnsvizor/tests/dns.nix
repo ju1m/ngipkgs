@@ -1,7 +1,5 @@
 # To test dnsvizor running as a recursive DNS resolver, we setup a
 # root DNS server, a TLD DNS server and an authoritative DNS server.
-# To let dnsvizor query our root DNS server instead of real root DNS
-# servers, we setup a firewall to deceive dnsvizor.
 
 # To test dnsvizor running as a stub DNS resolver, we forward its
 # query to another DNS server, which typically should be a recursive
@@ -21,7 +19,6 @@
   exampleName,
   resolverKind,
   useNetworkd,
-  useNftables,
   ...
 }:
 
@@ -32,6 +29,17 @@ assert builtins.elem resolverKind [
 assert builtins.isBool useNetworkd;
 
 let
+  # Root servers rarely change and are hardcoded in `ocaml-dns`,
+  # only one of them working is enough for this test.
+  # Source: https://www.internic.net/domain/named.root
+  # Source: https://github.com/mirage/ocaml-dns/blob/main/resolver/dns_resolver_root.ml
+  root_servers = {
+    "A.ROOT-SERVERS.NET." = {
+      A = "198.41.0.4";
+      AAAA = "2001:503:ba3e::2:30";
+    };
+  };
+
   vlan = 1;
   commonDnsServerModule = {
     services.knot = {
@@ -149,134 +157,10 @@ let
 
       networking = {
         inherit useNetworkd;
-        nftables.enable = useNftables;
       };
 
       environment.systemPackages = [ pkgs.q ]; # DNS query tool used in testScript
     };
-
-  emulateRootDnsServer =
-    {
-      lib,
-      config,
-      nodes,
-      pkgs,
-      modulesPath,
-      ...
-    }:
-    let
-      cfg = config.services.dnsvizor;
-      rootDnsServerRealIpv4s = [
-        "198.41.0.4"
-        "170.247.170.2"
-        "192.33.4.12"
-        "199.7.91.13"
-        "192.203.230.10"
-        "192.5.5.241"
-        "192.112.36.4"
-        "198.97.190.53"
-        "192.36.148.17"
-        "192.58.128.30"
-        "193.0.14.129"
-        "199.7.83.42"
-        "202.12.27.33"
-      ];
-      rootDnsServerRealIpv6s = [
-        "2001:503:ba3e::2:30"
-        "2801:1b8:10::b"
-        "2001:500:2::c"
-        "2001:500:2d::d"
-        "2001:500:a8::e"
-        "2001:500:2f::f"
-        "2001:500:12::d0d"
-        "2001:500:1::53"
-        "2001:7fe::53"
-        "2001:503:c27::2:30"
-        "2001:7fd::1"
-        "2001:500:9f::42"
-        "2001:dc3::35"
-      ];
-    in
-    (lib.mkMerge [
-      (lib.mkIf config.networking.nftables.enable {
-        networking.nftables.tables.emulateRootDnsServer = {
-          family = "inet";
-          content = ''
-            chain prerouting {
-              type nat hook prerouting priority dstnat
-              ip daddr @root_dns_server_real_ipv4s iifname ${quote cfg.unikernelInterface} dnat to ${getIpv4 nodes.rootDnsServer}
-              ip6 daddr @root_dns_server_real_ipv6s iifname ${quote cfg.unikernelInterface} dnat to ${getIpv6 nodes.rootDnsServer}
-            }
-            set root_dns_server_real_ipv4s {
-              type ipv4_addr;
-              elements = { ${lib.concatStringsSep "," rootDnsServerRealIpv4s} };
-            }
-            set root_dns_server_real_ipv6s {
-              type ipv6_addr;
-              elements = { ${lib.concatStringsSep "," rootDnsServerRealIpv6s} };
-            }
-          '';
-        };
-      })
-      (lib.mkIf (!config.networking.nftables.enable) {
-        systemd.services.emulateRootDnsServer =
-          let
-            helpers = import (modulesPath + "/services/networking/helpers.nix") { inherit config lib; };
-            flush = ''
-              ${helpers}
-              ip46tables -w -t nat -D PREROUTING -j emulate-root-dns-server 2>/dev/null|| true
-              ip46tables -w -t nat -F emulate-root-dns-server 2>/dev/null || true
-              ip46tables -w -t nat -X emulate-root-dns-server 2>/dev/null || true
-            '';
-            setup = ''
-              ${helpers}
-              ip46tables -w -t nat -N emulate-root-dns-server
-              ${rules}
-              ip46tables -w -t nat -A PREROUTING -j emulate-root-dns-server
-            '';
-            rules = lib.concatMapStrings mkRule (
-              mkCfgs "iptables" (getIpv4 nodes.rootDnsServer) quoteIpv4 rootDnsServerRealIpv4s
-              ++ lib.optionals cfg.ipv6Enabled (
-                mkCfgs "ip6tables" (getIpv6 nodes.rootDnsServer) quoteIpv6 rootDnsServerRealIpv6s
-              )
-            );
-            mkRule =
-              {
-                iptablesCommand,
-                rootDnsServerRealIp,
-                rootDnsServerTestIp,
-              }:
-              ''
-                ${iptablesCommand} -w -t nat -A emulate-root-dns-server \
-                  -i ${cfg.unikernelInterface} \
-                  -d ${rootDnsServerRealIp} \
-                  -j DNAT --to-destination ${rootDnsServerTestIp}
-              '';
-            mkCfgs =
-              iptablesCommand: rootDnsServerTestIp: quoteIp: rootDnsServerRealIps:
-              map (rootDnsServerRealIp: {
-                inherit iptablesCommand rootDnsServerTestIp rootDnsServerRealIp;
-              }) rootDnsServerRealIps;
-            quoteIpv4 = x: x;
-          in
-          {
-            description = "Emulate root DNS server";
-            wantedBy = [ "network.target" ];
-            after = [
-              "network-pre.target"
-              "systemd-modules-load.service"
-            ];
-            path = [ pkgs.iptables ];
-            unitConfig.ConditionCapability = "CAP_NET_ADMIN";
-            serviceConfig = {
-              Type = "oneshot";
-              RemainAfterExit = true;
-            };
-            script = flush + setup;
-            postStop = flush;
-          };
-      })
-    ]);
 
   getIpv4 = node: node.networking.primaryIPAddress;
   getIpv6 = node: node.networking.primaryIPv6Address;
@@ -293,15 +177,32 @@ in
       {
         imports = [ commonDnsServerModule ];
 
-        services.knot.settings.zone.".".file = pkgs.writeText "zone" ''
-          @ SOA a.root-servers.net. nstld.verisign-grs.com. 2026010900 1800 900 604800 86400
-          @ NS a.root-servers.net
-          a.root-servers.net A 198.41.0.4
-          a.root-servers.net AAAA 2001:503:ba3e::2:30
-          com NS a.tld-servers.com
-          a.tld-servers.com A ${getIpv4 nodes.tldDnsServer}
-          a.tld-servers.com AAAA ${getIpv6 nodes.tldDnsServer}
-        '';
+        networking.interfaces.eth1 = {
+          ipv4.addresses = lib.map (rr: {
+            address = rr.A;
+            prefixLength = 32;
+          }) (lib.attrValues root_servers);
+          ipv6.addresses = lib.map (rr: {
+            address = rr.AAAA;
+            prefixLength = 128;
+          }) (lib.attrValues root_servers);
+        };
+
+        services.knot.settings.zone.".".file = pkgs.writeText "zone" (
+          ''
+            @ SOA a.root-servers.net. nstld.verisign-grs.com. 2026010900 1800 900 604800 86400
+            com NS a.tld-servers.com
+            a.tld-servers.com A ${getIpv4 nodes.tldDnsServer}
+            a.tld-servers.com AAAA ${getIpv6 nodes.tldDnsServer}
+          ''
+          + lib.concatStringsSep "\n" (
+            lib.mapAttrsToList (ns: rr: ''
+              @ NS ${ns}
+              ${ns} A ${rr.A}
+              ${ns} AAAA ${rr.AAAA}
+            '') root_servers
+          )
+        );
       };
 
     tldDnsServer =
@@ -355,8 +256,20 @@ in
         imports = [
           commonDnsResolverModule
           sources.examples.DNSvizor.${exampleName}
-        ]
-        ++ lib.optional (resolverKind == "recursive") emulateRootDnsServer;
+        ];
+
+        networking.interfaces.${config.services.dnsvizor.mainInterface} = {
+          ipv4.routes = lib.map (rr: {
+            address = rr.A;
+            prefixLength = 32;
+            via = getIpv4 nodes.rootDnsServer;
+          }) (lib.attrValues root_servers);
+          ipv6.routes = lib.map (rr: {
+            address = rr.AAAA;
+            prefixLength = 128;
+            via = getIpv6 nodes.rootDnsServer;
+          }) (lib.attrValues root_servers);
+        };
 
         services.dnsvizor = {
           settings.dns-upstream =
