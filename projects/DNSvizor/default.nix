@@ -114,10 +114,6 @@ in
                 true
                 false
               ];
-              useNftables = [
-                true
-                false
-              ];
             };
           }
           {
@@ -128,10 +124,6 @@ in
             testCfg = {
               resolverKind = [ "recursive" ];
               useNetworkd = [
-                true
-                false
-              ];
-              useNftables = [
                 true
                 false
               ];
