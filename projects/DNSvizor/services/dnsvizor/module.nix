@@ -453,21 +453,5 @@ in
       If you build your own firewall, allow packets from ${cfg.unikernelInterface} to ${cfg.mainInterface}.
       After a firewall is set up, set services.dnsvizor.packetForwardingIsSecure to true to disable this warning.
     '';
-
-    # TODO remove this after https://github.com/ngi-nix/ngipkgs/pull/1907 is merged
-    services.dnsvizor.package = pkgs.fetchurl {
-      pname = "dnsvizor";
-      version = "0-unstable-2026-01-13";
-
-      url = "https://builds.robur.coop/job/dnsvizor/build/dd2ac462-f0d4-4866-8439-e4fbbc1e97ae/f/bin/dnsvizor.hvt";
-      hash = "sha256-Rr8OX89DcP1sZv8BI417areNWOc9PVpIduN78XfuG2I=";
-      recursiveHash = true;
-
-      downloadToTemp = true;
-      postFetch = ''
-        mkdir -p $out
-        mv -v $downloadedFile $out/dnsvizor.hvt
-      '';
-    };
   };
 }
