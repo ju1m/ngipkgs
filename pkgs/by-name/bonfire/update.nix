@@ -45,7 +45,6 @@ in
         deps=$(
             nix -L --show-trace --extra-experimental-features "nix-command" \
                 build \
-                --rebuild \
                 --option sandbox relaxed \
                 --no-link --print-out-paths \
                 -f . \
